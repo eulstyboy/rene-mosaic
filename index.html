@@ -272,7 +272,8 @@ const HIRES_MAX = 1400;
 const HIRES_BUDGET = 5e8;          // bytes of full-res tiles kept during one render
 const CELL_CAP = 300000;
 const state = {
-  target:null, targetName:'', lib:[], libIsDemo:false,
+  target:null, targetName:'', lib:[], libIsDemo:false, targetIsDemo:false,
+  libVersion:0, targetVersion:0, importing:0, showingDemo:false, rendered:{lib:-1, target:-1},
   full:null, small:null, plan:null, transparent:false, exportUrl:null,
   shape:'square', busy:false, cancel:false, seed:1,
   view:{scale:1, ox:0, oy:0}
@@ -339,18 +340,19 @@ async function loadTarget(file){
   if (!file) return;
   try {
     const bmp=await decode(file), old=state.target;
-    state.target=bmp; state.targetName=file.name;
+    state.target=bmp; state.targetName=file.name; state.targetIsDemo=false; state.targetVersion++;
     if (old && old.close && !state.busy) old.close();
     const t=$('targetThumb'); t.innerHTML=''; t.appendChild(squareThumb(bmp,108));
     $('targetInfo').textContent=`${file.name} · ${bmp.width}×${bmp.height}`;
-    $('demoTag').hidden=true; updateDims();
+    $('demoTag').hidden=true; updateDims(); refreshDemoMosaic();
   } catch(e){ setStatus(`Can't read ${file.name}.${isHeic(file)?' HEIC isn’t supported by this browser: export it as JPG.':''}`); }
 }
 async function addLibrary(files){
   const list=[...files].filter(isImage);
   if (!list.length){ setStatus('No images found in what you dropped.'); return; }
-  if (state.libIsDemo){ state.lib=[]; state.libIsDemo=false; }
-  $('demoTag').hidden=true;
+  /* the first real photos replace the demo tiles entirely */
+  if (state.libIsDemo){ state.lib=[]; state.libIsDemo=false; state.libVersion++; updateLibUI(); }
+  $('demoTag').hidden=true; state.importing++;
   let done=0, failed=0, heic=0;
   const work=async f=>{
     try {
@@ -369,18 +371,19 @@ async function addLibrary(files){
   let msg=`${state.lib.length} tiles ready.`;
   if (failed) msg+=` ${failed} unreadable${heic?` (${heic} HEIC: export as JPG)`:''}.`;
   setStatus(msg); updateLibUI();
+  state.importing--; refreshDemoMosaic();
 }
 function updateLibUI(){
   const n=state.lib.length;
   $('libCount').textContent=`${n.toLocaleString('en')} photo${n===1?'':'s'}`;
   const t=$('libThumb');
   if (n){
-    const k=Math.min(n,16);
-    if (+t.dataset.grid!==k){
+    const k=Math.min(n,16), key=`${state.libVersion}:${k}`;
+    if (t.dataset.grid!==key){
       t.innerHTML=''; const c=mkCanvas(108,108), ctx=c.getContext('2d');
       const side=k>9?4:k>4?3:k>1?2:1, s=108/side;
       for (let i=0;i<k;i++) ctx.drawImage(state.lib[i].thumb,(i%side)*s,((i/side)|0)*s,s,s);
-      t.appendChild(c); t.dataset.grid=k;
+      t.appendChild(c); t.dataset.grid=key;
     }
     $('libInfo').textContent = state.libIsDemo ? 'Demo tiles (replaced when you add photos).' : n<100 ? 'Few photos: add more for richer shading.' : 'Library ready.';
   } else { t.innerHTML='Photos'; delete t.dataset.grid; $('libInfo').textContent='Drop photos (or a folder). 200 or more for a good result.'; }
@@ -400,7 +403,8 @@ function makeDemo(){
   x.fillStyle='rgba(0,0,0,.28)'; x.beginPath(); x.ellipse(W*.62,H*.45,W*.2,H*.28,0,0,7); x.fill();
   state.target=c; state.targetName='demo';
   const t=$('targetThumb'); t.innerHTML=''; t.appendChild(squareThumb(c,108)); $('targetInfo').textContent='Demo portrait';
-  const rnd=mulberry32(7); state.lib=[]; state.libIsDemo=true;
+  state.targetIsDemo=true; state.targetVersion++;
+  const rnd=mulberry32(7); state.lib=[]; state.libIsDemo=true; state.libVersion++;
   for (let i=0;i<160;i++){
     const th=mkCanvas(THUMB,THUMB), k=th.getContext('2d');
     const h=rnd()*360, l=20+rnd()*60, s=30+rnd()*50;
@@ -975,6 +979,7 @@ async function generate(){
   if (state.busy){ state.cancel=true; setStatus('Cancelling…'); return; }
   if (!state.target) return;
   state.busy=true; state.cancel=false; setBusyUI(true);
+  const used={lib:state.libVersion, target:state.targetVersion}, demoRun=state.libIsDemo||state.targetIsDemo;
   const {W,H}=outDims();
   const o={ W,H, N:+$('cols').value, shape:state.shape, inset:1-(+$('gap').value)/100, maskKind:$('mask').value,
     bg:$('bg').value, transparent:$('bgT').checked, colorize:+$('colorize').value, blend:+$('blend').value,
@@ -986,6 +991,7 @@ async function generate(){
     const tiles = state.lib.length ? state.lib.slice() : [{thumb:squareThumb(state.target,THUMB,true), img:state.target, aspect:1}];
     const res=await renderMosaic(state.target,tiles,o,(p,msg)=>{ setProg(p); if (msg) setStatus(msg); });
     state.full=res.canvas; state.small=makeSmall(res.canvas); state.plan=res.plan; state.transparent=o.transparent;
+    state.rendered=used; state.showingDemo=demoRun;
     fitView(); drawPreview(); setProg(1);
     setStatus(`Done in ${((performance.now()-t0)/1000).toFixed(1)} s · ${W}×${H} px · ${res.count.toLocaleString('en')} tiles${res.note?` · ${res.note}`:''}.`);
   } catch(e){
@@ -993,6 +999,12 @@ async function generate(){
     else { console.error(e); setStatus(e.userMessage || `Rendering failed: ${e.message}`); }
   }
   state.busy=false; state.cancel=false; setBusyUI(false); setTimeout(()=>setProg(0),800);
+  setTimeout(refreshDemoMosaic,0);
+}
+/* while the demo mosaic is on screen, rebuild it as soon as the user's own photos or portrait are in */
+function refreshDemoMosaic(){
+  if (state.busy || state.importing || !state.showingDemo) return;
+  if (state.rendered.lib!==state.libVersion || state.rendered.target!==state.targetVersion) generate();
 }
 
 /* ---------- preview / zoom ---------- */
@@ -1108,7 +1120,7 @@ $('btnShuffle').onclick=()=>{ state.seed=(Math.random()*4294967296)>>>0; generat
 $('fTarget').addEventListener('change',e=>{ loadTarget(e.target.files[0]); e.target.value=''; });
 $('fLib').addEventListener('change',e=>{ addLibrary(e.target.files); e.target.value=''; });
 $('fDir').addEventListener('change',e=>{ addLibrary(e.target.files); e.target.value=''; });
-$('btnClearLib').onclick=()=>{ state.lib=[]; state.libIsDemo=false; updateLibUI(); setStatus('Library cleared.'); };
+$('btnClearLib').onclick=()=>{ state.lib=[]; state.libIsDemo=false; state.libVersion++; updateLibUI(); setStatus('Library cleared.'); };
 $('dirLabel').addEventListener('keydown',e=>{ if (e.key==='Enter'||e.key===' '){ e.preventDefault(); $('fDir').click(); } });
 async function filesFromDrop(dt){
   const ents=[...(dt.items||[])].map(i=>i.webkitGetAsEntry&&i.webkitGetAsEntry()).filter(Boolean);

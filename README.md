@@ -1,5 +1,7 @@
 # René · photo mosaic generator
 
+Live at **https://renetiles.eulst.app**, listed on [eulst.app](https://eulst.app).
+
 Photo mosaic generator that runs entirely in the browser. No backend, no uploads: photos are read, matched and exported on the visitor's own machine. Fonts are embedded and the Content-Security-Policy blocks every network request, so nothing can leave the page.
 
 - Grid shapes: squares, bricks, hexagons, circles, diamonds, triangles, adaptive quadtree
@@ -14,6 +16,6 @@ Photo mosaic generator that runs entirely in the browser. No backend, no uploads
 
 ## Deploy
 
-Static site, one file (`index.html`) plus `vercel.json` for security headers. Import the repo at vercel.com/new (framework: Other, no build command) or run `vercel`.
+Static site, one file (`index.html`) plus `vercel.json` for security headers. Import the repo at vercel.com/new (framework: Other, no build command) or run `vercel`, then add the domain `renetiles.eulst.app` in Project → Settings → Domains (eulst.app already uses Vercel DNS, so no DNS record is needed).
 
 Made by [eulst](https://eulst.fr).
